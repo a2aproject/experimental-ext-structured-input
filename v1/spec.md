@@ -260,7 +260,7 @@ false statement. Verifiable evidence of human approval is outside the scope of t
   "metadata": {
     "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
       "type": "input_schema",
-      "id": "charge-1",
+      "id": "deploy-1",
       "answer_from": "person"
     }
   }
@@ -275,7 +275,7 @@ false statement. Verifiable evidence of human approval is outside the scope of t
   "metadata": {
     "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
       "type": "structured_input",
-      "id": "charge-1",
+      "id": "deploy-1",
       "answered_by": "person"
     }
   }
@@ -319,8 +319,8 @@ part. The agent **MAY** explain the rejection in a text part instead.
 ## 8. Intermediaries
 
 An intermediary is the client of one task (the downstream task) and serves another task for its own
-client (the upstream task). For example, a travel agent which works for a personal assistant calls
-an airline agent, and the airline agent asks for the approval of a charge.
+client (the upstream task). For example, a coding agent which works for a personal assistant calls
+a deployment agent, and the deployment agent asks for the approval of a deployment to production.
 
 If the downstream input request has no `answer_from`, the intermediary **MAY** provide the input
 itself or relay the input request.
@@ -360,7 +360,7 @@ continuation request to the downstream task with a `structured_input` part which
 If the downstream agent repeats its input request, the intermediary repeats the upstream input
 request under the same upstream `id`.
 
-**Example.** The airline agent publishes this part in the downstream task:
+**Example.** The deployment agent publishes this part in the downstream task:
 
 ```json
 {
@@ -373,14 +373,14 @@ request under the same upstream `id`.
   "metadata": {
     "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
       "type": "input_schema",
-      "id": "charge-1",
+      "id": "deploy-1",
       "answer_from": "person"
     }
   }
 }
 ```
 
-The travel agent publishes this part in the upstream task:
+The coding agent publishes this part in the upstream task:
 
 ```json
 {
@@ -395,15 +395,15 @@ The travel agent publishes this part in the upstream task:
       "type": "input_schema",
       "id": "relay-7",
       "answer_from": "person",
-      "asked_by": "Airline Agent"
+      "asked_by": "Deployment Agent"
     }
   }
 }
 ```
 
 The personal assistant shows the question to its user and sends the answer with `"id": "relay-7"`
-and `"answered_by": "person"`. The travel agent sends the same data to the airline agent with
-`"id": "charge-1"` and `"answered_by": "person"`.
+and `"answered_by": "person"`. The coding agent sends the same data to the deployment agent with
+`"id": "deploy-1"` and `"answered_by": "person"`.
 
 ## 9. Example
 
