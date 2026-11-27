@@ -40,6 +40,10 @@ explicitly define the error-handling loop where invalid input triggers a re-entr
   task continuation.
 - **Validation Loop:** Task state transition cycle in which the main task flow does not resume
   until continuation request strictly satisfies the schema definition.
+- **Answer Source:** Who provided the structured input: a person, a rule configured by a person,
+  or the client itself. An input request can require that a person provides the input.
+- **Intermediary:** An agent which is the client of a task that issued an input request, while it
+  serves a task for its own client.
 
 ## 4. Schemas
 
@@ -79,7 +83,8 @@ the JSON Schema draft version.
 
 The extension **SHOULD NOT** be marked as required, because an extension-unaware client can still
 understand the structured data request and generate a properly formatted continuation response
-(see [6.4](#64-untagged-input)).
+(see [6.4](#64-untagged-input)). The exception is an input request which requires an answer from a
+person (see [6.5](#65-answer-source)): an extension-unaware client cannot answer it.
 
 Extension-aware clients **SHOULD** activate the extension by including its URI in the
 `A2A-Extensions` service parameter of their requests. Agents **MAY** use the extension in a task
@@ -106,6 +111,11 @@ the input request (see [6.3](#63-request-correlation)).
   }
 }
 ```
+
+Parts of type `input_schema` **MAY** contain the `answer_from` and `asked_by` properties, and parts
+of type `structured_input` **MAY** contain the `answered_by` property (see
+[6.5](#65-answer-source) and [8](#8-intermediaries)). Receivers **MUST** ignore properties of the
+extension metadata object which they do not recognize.
 
 ### 6.2 Part Types
 
@@ -158,7 +168,52 @@ the structured input. If conditions 1 and 2 hold, the agent **MAY** still includ
 for that part in the repeated input request (see [7](#7-validation-loop)), since an
 extension-unaware client cannot otherwise learn why its input was not accepted.
 
-### 6.5 Examples
+### 6.5 Answer Source
+
+Some input must come from a person, for example the approval of a payment or of a deployment. When
+the client of the task is itself an agent, its model can produce input which satisfies the schema,
+and the agent which asked cannot tell the difference. The properties in this section let the agent
+state the requirement and let the client state who provided the input.
+
+**`answer_from`** (on `input_schema`, optional). The only defined value is `person`: the agent
+requires that a person gives or confirms the structured input for this input request. If the
+property is absent, the client decides how the input is produced. A repeated input request keeps
+its `answer_from` value. Other values are reserved. A client which does not recognize the value
+**MUST NOT** produce the input automatically.
+
+**`answered_by`** (on `structured_input`, optional). One of:
+
+- `person`: a person gave or confirmed this input in response to this input request.
+- `policy`: a rule which a person configured in advance produced this input (for example
+  "always allow this tool").
+- `agent`: the client produced this input itself, for example with a model.
+
+No rule in this extension depends on the difference between `policy` and `agent`. The two values
+let an agent record how the input was produced.
+
+A client **MUST NOT** set `answered_by` to `person` unless a person gave or confirmed the input in
+response to this input request, or in response to an input request relayed from it (see
+[8](#8-intermediaries)). A client **SHOULD** set `answered_by` when the input request has
+`answer_from`, and **MAY** set it on any other `structured_input` part.
+
+If the pending input request has `answer_from` set to `person`:
+
+1. A client which cannot obtain the input from a person **MUST NOT** provide the input. It **MAY**
+   cancel the task or leave the input request pending. A client which is an intermediary follows
+   [8](#8-intermediaries).
+1. The agent **MUST NOT** use a `structured_input` part whose `answered_by` is absent or is not
+   `person`, and **MUST** treat the continuation request as invalid (see
+   [7](#7-validation-loop)). The agent **SHOULD** explain the rejection in a text part, because a
+   client which does not know `answer_from` cannot otherwise learn why its input was not accepted.
+1. The agent **MUST NOT** accept untagged input under [6.4](#64-untagged-input), because untagged
+   input cannot carry `answered_by`. Such requests are not available to extension-unaware clients.
+
+`answered_by` is a statement made by the client. The agent cannot verify it, and it **MUST NOT**
+be treated as proof that a person was involved. It prevents a correctly implemented client from
+answering in place of a person by mistake. It does not protect against a client which makes a
+false statement. Verifiable evidence of human approval is outside the scope of this extension.
+
+### 6.6 Examples
 
 **A. Agent Requests Input (Schema)**
 
@@ -192,6 +247,41 @@ extension-unaware client cannot otherwise learn why its input was not accepted.
 }
 ```
 
+**C. Agent Requests Input From a Person**
+
+```json
+{
+  "data": {
+    "type": "object",
+    "properties": { "approved": { "type": "boolean" } },
+    "required": ["approved"]
+  },
+  "mediaType": "application/schema+json",
+  "metadata": {
+    "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
+      "type": "input_schema",
+      "id": "deploy-1",
+      "answer_from": "person"
+    }
+  }
+}
+```
+
+**D. Client Provides Input Given by a Person**
+
+```json
+{
+  "data": { "approved": true },
+  "metadata": {
+    "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
+      "type": "structured_input",
+      "id": "deploy-1",
+      "answered_by": "person"
+    }
+  }
+}
+```
+
 ## 7. Validation Loop
 
 When continuation request is received the agent **MAY** acknowledge it by publishing a
@@ -199,7 +289,9 @@ When continuation request is received the agent **MAY** acknowledge it by publis
 
 It then **MUST** validate that the structured input provided in the request (a `structured_input`
 part, or an untagged part accepted under [6.4](#64-untagged-input)) satisfies the schema
-definition from the input request.
+definition from the input request. The agent checks the `id` (see
+[6.3](#63-request-correlation)) and the answer source (see [6.5](#65-answer-source)) before the
+schema. Input which fails one of these two checks is not validated against the schema.
 
 If the validation fails, but the request contains other parts (e.g. text), the agent **SHOULD**
 process these parts if it is able to while the input request is pending. This allows the client to
@@ -208,8 +300,9 @@ cannot act on additional parts while the input request is pending (for example, 
 execution is suspended inside a tool call awaiting the input) **MAY** ignore them. Additional parts
 **MUST NOT** be interpreted as the structured input.
 
-If the input was invalid, missing, or correlated with a different input request (see
-[6.3](#63-request-correlation)), the agent **MUST** publish a new structured input request which:
+If the input was invalid, missing, correlated with a different input request (see
+[6.3](#63-request-correlation)), or not from the required answer source (see
+[6.5](#65-answer-source)), the agent **MUST** publish a new structured input request which:
 
 1. **MUST** contain the original (or updated) schema definition.
 1. **SHOULD** contain validation errors conforming to the JSON Schema Basic output format if the
@@ -219,11 +312,100 @@ If the input was invalid, missing, or correlated with a different input request 
 
 The new input request keeps the `id` of the original one, if it had one.
 
-A `structured_input` part rejected because of an `id` mismatch was not validated against the
-schema, so the agent **SHOULD NOT** report it with a `validation_error` part. The agent **MAY**
-explain the rejection in a text part instead.
+A `structured_input` part rejected because of an `id` mismatch or because of its answer source was
+not validated against the schema, so the agent **SHOULD NOT** report it with a `validation_error`
+part. The agent **MAY** explain the rejection in a text part instead.
 
-## 8. Example
+## 8. Intermediaries
+
+An intermediary is the client of one task (the downstream task) and serves another task for its own
+client (the upstream task). For example, a coding agent which works for a personal assistant calls
+a deployment agent, and the deployment agent asks for the approval of a deployment to production.
+
+If the downstream input request has no `answer_from`, the intermediary **MAY** provide the input
+itself or relay the input request.
+
+If the downstream input request has `answer_from` set to `person`, the intermediary **MUST NOT**
+produce the input with a model or any other automated component. It **MUST** do one of the
+following:
+
+- obtain the input from a person directly, if it has the means to do so;
+- relay the input request to its own client, as described below;
+- provide no input, and cancel the downstream task or leave the input request pending. This is the
+  only option when no person can be reached, for example when a schedule started the upstream task.
+
+To relay an input request, the intermediary:
+
+1. **MUST** publish an input request in the upstream task with the schema definition and the
+   `answer_from` value of the downstream input request.
+1. **MUST NOT** assume that the downstream `id` is valid in the upstream task. An `id` is unique
+   only within one task (see [6.3](#63-request-correlation)), so the intermediary chooses an `id`
+   for the upstream input request and keeps the association between the two.
+1. **SHOULD** set `asked_by` to a name by which a person can identify the agent that issued the
+   downstream input request, for example the `name` from its agent card. If the downstream input
+   request already has `asked_by`, the intermediary **MUST** keep that value. `asked_by` is a
+   statement made by the intermediary. A client **MUST NOT** present it as a verified identity.
+1. **SHOULD** include the parts of the downstream status message which explain the request, because
+   the person needs them to decide.
+
+When the intermediary receives the continuation request in the upstream task, it processes it as
+any agent does (see [7](#7-validation-loop)). If the input is accepted, the intermediary sends a
+continuation request to the downstream task with a `structured_input` part which carries:
+
+1. the `id` of the downstream input request;
+1. the data it received, unchanged;
+1. the `answered_by` value it received, unchanged. When it relays, the intermediary **MUST NOT**
+   add or change `answered_by`.
+
+If the downstream agent repeats its input request, the intermediary repeats the upstream input
+request under the same upstream `id`.
+
+**Example.** The deployment agent publishes this part in the downstream task:
+
+```json
+{
+  "data": {
+    "type": "object",
+    "properties": { "approved": { "type": "boolean" } },
+    "required": ["approved"]
+  },
+  "mediaType": "application/schema+json",
+  "metadata": {
+    "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
+      "type": "input_schema",
+      "id": "deploy-1",
+      "answer_from": "person"
+    }
+  }
+}
+```
+
+The coding agent publishes this part in the upstream task:
+
+```json
+{
+  "data": {
+    "type": "object",
+    "properties": { "approved": { "type": "boolean" } },
+    "required": ["approved"]
+  },
+  "mediaType": "application/schema+json",
+  "metadata": {
+    "https://github.com/a2aproject/experimental-ext-structured-input/tree/main/v1": {
+      "type": "input_schema",
+      "id": "relay-7",
+      "answer_from": "person",
+      "asked_by": "Deployment Agent"
+    }
+  }
+}
+```
+
+The personal assistant shows the question to its user and sends the answer with `"id": "relay-7"`
+and `"answered_by": "person"`. The coding agent sends the same data to the deployment agent with
+`"id": "deploy-1"` and `"answered_by": "person"`.
+
+## 9. Example
 
 1. **Input required**
 
